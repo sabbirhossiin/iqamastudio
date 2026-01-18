@@ -1,15 +1,27 @@
 /**
- * SAUDI IQAMA STUDIO PRO - FINAL 
- * Features: Free Crop, Delete Option, Pagination, Big Print
+ * SAUDI IQAMA STUDIO PRO (FINAL GITHUB VERSION)
+ * Features: Password Lock, Free Crop, Big Print, Original Filenames
  */
 
-const DB_NAME = 'IqamaStudioDB_Final_V3';
+const APP_PASSWORD = "5544332211"; // ACCESS PIN
+const DB_NAME = 'IqamaStudioDB_GitHub_V1';
 const db = new Dexie(DB_NAME);
-db.version(1).stores({ cards: '++id, blob, cropData' });
+// Updated Store: 'name' added for filename retention
+db.version(1).stores({ cards: '++id, blob, name, cropData' });
 
 const state = { cards: [], activeIndex: -1, cropper: null };
 
+// UI Elements
 const els = {
+    // Login
+    loginOverlay: document.getElementById('loginOverlay'),
+    passwordInput: document.getElementById('passwordInput'),
+    btnLogin: document.getElementById('btnLogin'),
+    loginError: document.getElementById('loginError'),
+    appContent: document.getElementById('appContent'),
+    btnLogout: document.getElementById('btnLogout'),
+
+    // App
     fileInput: document.getElementById('fileInput'),
     thumbStrip: document.getElementById('thumbnailStrip'),
     editorImage: document.getElementById('editorImage'),
@@ -26,20 +38,59 @@ const els = {
     btnRotate: document.getElementById('btnRotate'),
     btnReset: document.getElementById('btnReset'),
     btnPrint: document.getElementById('btnPrint'),
-    btnDlZip: document.getElementById('btnDlZip'),
-    btnDlJpg: document.getElementById('btnDlJpg')
+    btnDlZip: document.getElementById('btnDlZip')
 };
 
-window.addEventListener('DOMContentLoaded', async () => {
-    await loadFromDB();
+// --- AUTHENTICATION ---
+function checkAuth() {
+    const isAuth = localStorage.getItem('isIqamaLoggedIn');
+    if (isAuth === 'true') {
+        unlockApp();
+    }
+}
+
+function unlockApp() {
+    els.loginOverlay.classList.add('hidden');
+    els.appContent.classList.remove('opacity-0');
+    initApp();
+}
+
+function handleLogin() {
+    if (els.passwordInput.value === APP_PASSWORD) {
+        localStorage.setItem('isIqamaLoggedIn', 'true');
+        unlockApp();
+    } else {
+        els.loginError.classList.remove('hidden');
+        els.passwordInput.value = '';
+        els.passwordInput.focus();
+    }
+}
+
+function handleLogout() {
+    localStorage.removeItem('isIqamaLoggedIn');
+    location.reload();
+}
+
+// --- APP INIT ---
+window.addEventListener('DOMContentLoaded', () => {
+    checkAuth();
+    
+    // Auth Events
+    els.btnLogin.addEventListener('click', handleLogin);
+    els.passwordInput.addEventListener('keypress', e => { if(e.key==='Enter') handleLogin(); });
+    els.btnLogout.addEventListener('click', handleLogout);
+
     setupEventListeners();
 });
+
+async function initApp() {
+    await loadFromDB();
+}
 
 async function loadFromDB() {
     state.cards = await db.cards.toArray();
     renderThumbnails();
     if (state.cards.length > 0) selectCard(state.cards.length - 1);
-    else resetEditor();
     updatePaginationUI();
 }
 
@@ -51,8 +102,11 @@ async function handleUpload(e) {
 
     for (const file of files) {
         const blob = await fileToDataURL(file);
-        const id = await db.cards.add({ blob: blob, cropData: null });
-        state.cards.push({ id, blob, cropData: null });
+        // Save Original Filename
+        const fileName = file.name;
+        
+        const id = await db.cards.add({ blob: blob, name: fileName, cropData: null });
+        state.cards.push({ id, blob, name: fileName, cropData: null });
     }
     
     renderThumbnails();
@@ -65,58 +119,44 @@ function fileToDataURL(file) {
     return new Promise(r => { const rd = new FileReader(); rd.onload = e => r(e.target.result); rd.readAsDataURL(file); });
 }
 
-// --- THUMBNAILS WITH DELETE BUTTON ---
 function renderThumbnails() {
     els.thumbStrip.innerHTML = '';
     state.cards.forEach((card, index) => {
         const div = document.createElement('div');
         div.className = `thumb-item ${index === state.activeIndex ? 'active' : ''}`;
         
-        // Image & Badge
-        let html = `<img src="${card.blob}" onclick="selectCard(${index})">
-                    <div class="thumb-badge">${index + 1}</div>`;
+        const displayName = card.name.length > 10 ? card.name.substring(0, 8) + '...' : card.name;
         
-        // Delete Button (X)
-        html += `<div class="thumb-delete" onclick="deleteCard(event, ${index})">
-                    <i class="fa-solid fa-xmark"></i>
-                 </div>`;
-                 
-        div.innerHTML = html;
+        div.innerHTML = `
+            <img src="${card.blob}" onclick="selectCard(${index})" title="${card.name}">
+            <div class="thumb-badge">${index + 1}</div>
+            <div class="absolute top-0 left-0 w-full bg-black/50 text-[8px] text-white text-center p-0.5 truncate pointer-events-none">${displayName}</div>
+            <div class="thumb-delete" onclick="deleteCard(event, ${index})"><i class="fa-solid fa-xmark"></i></div>
+        `;
         els.thumbStrip.appendChild(div);
     });
 }
 
-// --- DELETE LOGIC ---
 async function deleteCard(e, index) {
-    e.stopPropagation(); // Stop clicking the card itself
-    
+    e.stopPropagation();
     if(!confirm("Delete this image?")) return;
-
     const cardId = state.cards[index].id;
-    
-    // 1. Remove from DB
     await db.cards.delete(cardId);
-    
-    // 2. Remove from State
     state.cards.splice(index, 1);
     
-    // 3. Handle Active Index Shift
     if (state.cards.length === 0) {
         state.activeIndex = -1;
         resetEditor();
     } else if (index === state.activeIndex) {
-        // If deleted current, go to previous or 0
         const newIndex = index > 0 ? index - 1 : 0;
         selectCard(newIndex);
     } else if (index < state.activeIndex) {
-        // If deleted one before current, shift index down
         state.activeIndex--;
-        renderThumbnails(); // Just re-render thumbs, keep current editor
+        renderThumbnails();
         updatePaginationUI();
     } else {
         renderThumbnails();
     }
-    
     showToast("Deleted");
 }
 
@@ -142,10 +182,11 @@ function selectCard(index) {
     els.cropperWrapper.classList.remove('hidden');
     els.editorImage.src = card.blob;
 
+    // --- FREE CROP (CAMSCANNER STYLE) ---
     state.cropper = new Cropper(els.editorImage, {
         viewMode: 1, 
         dragMode: 'crop', 
-        aspectRatio: NaN, 
+        aspectRatio: NaN, // Free Crop
         autoCropArea: 0.9, 
         responsive: true,
         restore: false,
@@ -195,6 +236,7 @@ function updatePreview() {
     }
 }
 
+// --- PRINT LOGIC (BIG A4) ---
 async function handlePrint() {
     if (state.cards.length === 0) return showToast("No images!");
     showToast("Generating Pages...");
@@ -210,16 +252,30 @@ async function handlePrint() {
     setTimeout(() => window.print(), 800);
 }
 
+// --- ZIP DOWNLOAD (ORIGINAL NAMES) ---
 async function handleDownloadZip() {
     if (state.cards.length === 0) return;
     showToast("Zipping...");
     const zip = new JSZip();
-    const folder = zip.folder("Scans");
+    const folder = zip.folder("Iqama_Scans");
+    
     for (let i = 0; i < state.cards.length; i++) {
-        const imgUrl = await getHighResCrop(state.cards[i]);
-        folder.file(`Scan_${i+1}.jpg`, imgUrl.split(',')[1], {base64: true});
+        const card = state.cards[i];
+        const imgUrl = await getHighResCrop(card);
+        
+        // Preserve Filename
+        let finalName = card.name;
+        // Ensure .jpg extension since we export as JPEG
+        if (!finalName.includes('.')) {
+            finalName += '.jpg';
+        } else {
+            finalName = finalName.substring(0, finalName.lastIndexOf('.')) + '.jpg';
+        }
+        
+        folder.file(finalName, imgUrl.split(',')[1], {base64: true});
     }
-    zip.generateAsync({type:"blob"}).then(c => { saveAs(c, "Batch_Scans.zip"); showToast("Done!"); });
+    
+    zip.generateAsync({type:"blob"}).then(c => { saveAs(c, "Iqama_Batch_Scans.zip"); showToast("Done!"); });
 }
 
 async function getHighResCrop(card) {
@@ -252,10 +308,12 @@ function setupEventListeners() {
     els.zoomRange.oninput = (e) => state.cropper?.zoomTo(e.target.value);
     els.btnPrint.onclick = handlePrint;
     els.btnDlZip.onclick = handleDownloadZip;
-    els.btnDlJpg.onclick = async () => { if(state.activeIndex > -1) { const url = await getHighResCrop(state.cards[state.activeIndex]); const a = document.createElement('a'); a.href = url; a.download = 'Scan.jpg'; a.click(); }};
+    
     document.addEventListener('keydown', (e) => {
-        if(e.key === 'ArrowLeft') handlePrev();
-        if(e.key === 'ArrowRight') handleNext();
+        if (document.getElementById('loginOverlay').classList.contains('hidden')) {
+            if(e.key === 'ArrowLeft') handlePrev();
+            if(e.key === 'ArrowRight') handleNext();
+        }
     });
 }
 
